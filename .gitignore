@@ -141,3 +141,4 @@ dmypy.json
 src/scenic/syntax/parser.py
 
 simulation.gif
+**/*.bytes*
