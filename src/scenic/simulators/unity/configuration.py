@@ -36,6 +36,31 @@ class Info(BaseModel):
     full_name: str = Field(default=None)
     asset_bundle: str = Field(default=None)
 
+class InfoBundle(Info):
+    asset_bundle: str
+    full_name: str = Field(default=None)
+    
+    @model_validator(mode="after")
+    def validate_model(cls, values):
+        asset_bundle = values.asset_bundle
+        name = values.name
+        asset_info_csv = __cwd__ / f"new_bundles/{asset_bundle}_asset_info.csv"
+        try:
+            df = pd.read_csv(asset_info_csv, header=None, names=__asset_info_columns__)
+            key_value_pairs = dict(zip(df["name"].apply(lambda x:x.lower()), df["path"]))
+            if name not in key_value_pairs:
+                raise KeyError(f'The "{asset_bundle}" asset bundle does not include "{name}".')
+            values.full_name = key_value_pairs[name]
+        except FileNotFoundError:
+            logger.error(f"Asset info CSV file not found: {asset_info_csv}")
+            raise
+        except KeyError as e:
+            logger.error(str(e))
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error occurred: {str(e)}")
+            raise
+        return values
 
 class InfoRobots(Info):
     """JSON 'info' class for the "vehicles" asset bundle.
@@ -69,22 +94,25 @@ class InfoRobots(Info):
             raise
         return values
 
-
-class ThreeVector(BaseModel):
-    x: float
-    y: float
-    z: float
-    
+# Define a base model that will handle the exclusion of 'array' field
+class ExcludeArrayBaseModel(BaseModel):
     class Config:
         arbitrary_types_allowed = True
         json_encoders = {
             np.ndarray: lambda v: v.tolist()  # Convert ndarray to list for JSON serialization
         }
 
-    @computed_field
-    @property
-    def array(self) -> np.ndarray:
-        return np.array([self.x, self.y, self.z])
+    def model_dump(self, *args, **kwargs):
+        # Automatically exclude 'array' field for all derived models
+        kwargs.setdefault("exclude", set()).add("array")
+        return super().model_dump(*args, **kwargs)
+
+
+class ThreeVector(ExcludeArrayBaseModel):
+    x: float
+    y: float
+    z: float
+
 
 class Normalized(ThreeVector):
     magnitude: float = Field(default=None)
@@ -92,26 +120,38 @@ class Normalized(ThreeVector):
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
-        sqr_magnitude = self.array.dot(self.array)
+        sqr_magnitude = np.array([self.x, self.y, self.z]).dot(
+            np.array([self.x, self.y, self.z])
+        )
         self.magnitude = float(np.sqrt(sqr_magnitude))
         self.sqr_magnitude = float(sqr_magnitude)
 
+
 class SuperVector(Normalized):
-    normalized: ThreeVector = Field(default=None,exclude=True)
+    normalized: ThreeVector = Field(default=None, exclude=True)
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
         if 0 < self.magnitude:
-            norm = self.array / self.magnitude
+            norm = np.array([self.x, self.y, self.z]) / self.magnitude
             self.normalized = Normalized(x=norm[0], y=norm[1], z=norm[2])
         else:
-            logger.warning("Skipping normalization of zero magnitude vector.")
+            logger.debug("Skipping normalization of zero magnitude vector.")
             self.normalized = Normalized(x=self.x, y=self.y, z=self.z)
 
-class Position(SuperVector):
-    pass
+    def model_dump(self, *args, **kwargs):
+        kwargs.setdefault("exclude", set()).add("array")  # Exclude 'array' from dump
+        return super().model_dump(*args, **kwargs)
 
-class Rotation(BaseModel):
+
+class Position(SuperVector):
+    def model_dump(self, *args, **kwargs):
+        # Ensure 'array' is excluded
+        kwargs.setdefault("exclude", set()).add("array")
+        return super().model_dump(*args, **kwargs)
+
+
+class Rotation(ExcludeArrayBaseModel):
     euler_angles: SuperVector
     x: float = Field(default=None)
     y: float = Field(default=None)
@@ -120,11 +160,20 @@ class Rotation(BaseModel):
 
     def model_post_init(self, __context) -> None:
         super().model_post_init(__context)
-        r = R.from_euler("yxz", self.euler_angles.array, degrees=True)
+        r = R.from_euler(
+            "yxz",
+            [self.euler_angles.x, self.euler_angles.y, self.euler_angles.z],
+            degrees=True,
+        )
         self.y, self.x, self.z, self.w = r.as_quat()
 
     class Config:
         arbitrary_types_allowed = True
+
+    def model_dump(self, *args, **kwargs):
+        # Ensure 'array' is excluded
+        kwargs.setdefault("exclude", set()).add("array")
+        return super().model_dump(*args, **kwargs)
 
 
 class Obstacle(BaseModel):
@@ -143,13 +192,7 @@ class Configuration(BaseModel):
     obstacles: List[Obstacle]
     class Config:
         arbitrary_types_allowed = True
-    def to_json(self, fname, pretty=False) -> str:
-        indent = 4 if pretty else None
-        with open(fname, "w") as f:
-            json.dump(
-                [obstacle.to_dict() for obstacle in self.obstacles], f, indent=indent
-            )
-
+    
 
 if __name__ == "__main__":
     obstacles = []

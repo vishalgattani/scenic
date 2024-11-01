@@ -11,7 +11,7 @@ level = logging.INFO
 logger.setLevel(level)
 ch = logging.StreamHandler()
 ch.setLevel(level)
-formatter = logging.Formatter('[%(levelname)s] - %(message)s (%(lineno)d)')
+formatter = logging.Formatter('[%(levelname)s] - %(message)s (%(filename)s:%(lineno)d)')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
@@ -81,7 +81,6 @@ def snake2camel(snake_string: str) -> str:
 
 
 def write_model_scenic(bundle, fname_model="model.scenic"):
-    fname_model.parent.mkdir(parents=False, exist_ok=True)
     with open(fname_model, "w") as f:
         for i, asset in enumerate(bundle.assets):
             lines = [
@@ -99,8 +98,12 @@ def write_model_scenic(bundle, fname_model="model.scenic"):
 
 
 def process_bundle(bundle: AssetBundle, path: Path):
-    fname_model = path / f"{bundle.name}_model.scenic"
-    fname_json = path / f"{bundle.name}_info.json"
+    name = bundle.name
+    name = name.split(".")[0]
+    fname_model = path / name /"model.scenic"
+    fname_json = path / name / f"{bundle.name}_info.json"
+    fname_model.parent.mkdir(parents=False, exist_ok=True)
+    fname_json.parent.mkdir(parents=False, exist_ok=True)
     logger.info(f"Storing model in {fname_model}")
     logger.info(f"Storing bundle info in {fname_json}")
     if fname_model.exists():
@@ -119,9 +122,11 @@ def process_bundle(bundle: AssetBundle, path: Path):
 
 
 if __name__ == "__main__":
+    here = Path(__file__).parent.parent
+    logger.info(f"Processing bundles in {here}")
     csv_files = Path(Path(__file__).parent).rglob("*.csv")
     print(csv_files)
     for csv_file in csv_files:
         bundle = read_bundle(csv_file)
         logger.info(f'Processing "{bundle.name}" bundle from "{csv_file}"')
-        process_bundle(bundle=bundle,path = Path(__file__).parent)
+        process_bundle(bundle=bundle,path = here)
