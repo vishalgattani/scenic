@@ -1,10 +1,8 @@
-from datetime import datetime
-import json
 import logging
 import os
 import pathlib
-from typing import List
-from pydantic import BaseModel, Field, model_validator, computed_field
+from typing import List, Union
+from pydantic import BaseModel, Field, model_validator
 import numpy as np
 import pandas as pd
 from scipy.spatial.transform import Rotation as R
@@ -33,13 +31,25 @@ class Info(BaseModel):
     """
 
     name: str
-    full_name: str = Field(default=None)
-    asset_bundle: str = Field(default=None)
-
-class InfoBundle(Info):
     asset_bundle: str
     full_name: str = Field(default=None)
     
+    def load_asset_info(self) -> None:
+        """Loads asset info from the corresponding CSV and assigns the full path."""
+        logger.info(f"Loading asset info for '{self.name}' from '{self.asset_bundle}'...")
+        asset_info_csv = __cwd__ / f"new_bundles/{self.asset_bundle}_asset_info.csv"
+        df = pd.read_csv(asset_info_csv, header=None, names=__asset_info_columns__)
+        key_value_pairs = dict(zip(df["name"], df["path"]))
+
+        try:
+            self.full_name = key_value_pairs[self.name]
+        except KeyError:
+            logger.error(
+                f'The "{self.asset_bundle}" asset bundle does not include "{self.name}".'
+            )
+            raise KeyError(f'Asset "{self.name}" not found in bundle "{self.asset_bundle}".')
+        return self
+        
     @model_validator(mode="after")
     def validate_model(cls, values):
         asset_bundle = values.asset_bundle
@@ -47,7 +57,7 @@ class InfoBundle(Info):
         asset_info_csv = __cwd__ / f"new_bundles/{asset_bundle}_asset_info.csv"
         try:
             df = pd.read_csv(asset_info_csv, header=None, names=__asset_info_columns__)
-            key_value_pairs = dict(zip(df["name"].apply(lambda x:x.lower()), df["path"]))
+            key_value_pairs = dict(zip(df["name"], df["path"]))
             if name not in key_value_pairs:
                 raise KeyError(f'The "{asset_bundle}" asset bundle does not include "{name}".')
             values.full_name = key_value_pairs[name]
@@ -61,38 +71,52 @@ class InfoBundle(Info):
             logger.error(f"Unexpected error occurred: {str(e)}")
             raise
         return values
+    
+    def __init__(self, **data) -> None:
+        super().__init__(**data)
+        # self.load_asset_info()
 
-class InfoRobots(Info):
-    """JSON 'info' class for the "vehicles" asset bundle.
+class InfoBarrierPack(Info):
+    """JSON 'info' class for the "barrierpack" asset bundle.
 
     Attributes:
-        name (str): The name of one of the assets within the "vehicles" asset bundle.
-        full_name (str): The full name, with path, of the asset within the "vehicles" asset bundle.
-        asset_bundle (str): The name of the asset bundle: "vehicles"
+        name (str): The name of one of the assets within the "barrierpack" asset bundle.
+        full_name (str): The full name, with path, of the asset within the "barrierpack" asset bundle.
+        asset_bundle (str): The name of the asset bundle: "barrierpack"
+    """
+    asset_bundle: str = "barrierpack.bytes"
+    
+
+class InfoRobots(Info):
+    """JSON 'info' class for the "robots" asset bundle.
+
+    Attributes:
+        name (str): The name of one of the assets within the "robots" asset bundle.
+        full_name (str): The full name, with path, of the asset within the "robots" asset bundle.
+        asset_bundle (str): The name of the asset bundle: "robots"
     """
     asset_bundle: str = Field(default="robot.bytes")
-    full_name: str = Field(default=None)
-    @model_validator(mode="after")
-    def validate_model(cls, values):
-        asset_bundle = values.asset_bundle
-        name = values.name
-        asset_info_csv = __cwd__ / f"new_bundles/{asset_bundle}_asset_info.csv"
-        try:
-            df = pd.read_csv(asset_info_csv, header=None, names=__asset_info_columns__)
-            key_value_pairs = dict(zip(df["name"].apply(lambda x:x.lower()), df["path"]))
-            if name not in key_value_pairs:
-                raise KeyError(f'The "{asset_bundle}" asset bundle does not include "{name}".')
-            values.full_name = key_value_pairs[name]
-        except FileNotFoundError:
-            logger.error(f"Asset info CSV file not found: {asset_info_csv}")
-            raise
-        except KeyError as e:
-            logger.error(str(e))
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error occurred: {str(e)}")
-            raise
-        return values
+    
+class InfoGrass(Info):
+    """JSON 'info' class for the "grass" asset bundle.
+
+    Attributes:
+        name (str): The name of one of the assets within the "grass" asset bundle.
+        full_name (str): The full name, with path, of the asset within the "grass" asset bundle.
+        asset_bundle (str): The name of the asset bundle: "grass"
+    """
+    asset_bundle: str = "grass.bytes"
+
+class InfoRocks(Info):
+    """JSON 'info' class for the "rocks" asset bundle.
+
+    Attributes:
+        name (str): The name of one of the assets within the "rocks" asset bundle.
+        full_name (str): The full name, with path, of the asset within the "rocks" asset bundle.
+        asset_bundle (str): The name of the asset bundle: "rocks"
+    """
+
+    asset_bundle: str = "rocks.bytes"
 
 # Define a base model that will handle the exclusion of 'array' field
 class ExcludeArrayBaseModel(BaseModel):
@@ -192,21 +216,56 @@ class Configuration(BaseModel):
     obstacles: List[Obstacle]
     class Config:
         arbitrary_types_allowed = True
+        
+
+def get_asset_info(asset_name: str) -> Union[Info,None]:
+    """Attempts to retrieve asset info from multiple asset bundles.
+
+    Args:
+        asset_name (str): The name of the asset to search for.
+
+    Returns:
+        Info: An instance of Info with the asset's full path and bundle details, if found.
+    """
+    asset_classes:List[Info] = [InfoRobots, InfoBarrierPack, InfoGrass, InfoRocks]
+    asset_info: Union[Info,None] = None
+    try:
+        for asset_class in asset_classes:
+            try:
+                asset_info = asset_class(name=asset_name)
+                print(asset_info)
+                asset_info = asset_info.load_asset_info()
+                logger.info(f"Found asset '{asset_name}' in '{asset_info.asset_bundle}'.")
+            except KeyError:
+                continue  # Try the next asset class if KeyError is raised
+
+        # logger.error(f"Asset '{asset_name}' not found in any asset bundle.")
+        # raise KeyError(f"Asset '{asset_name}' not found in any known bundle.")
+    except KeyError as e:
+        logger.error(e)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+    finally:
+        return asset_info
+
     
 
 if __name__ == "__main__":
     obstacles = []
-    name_1 = "husky"
-    info_1 = InfoRobots(name=name_1.lower())
-    position_1 = Position(x=0.0490000844, y=0.140999854, z=-30.276001)
-    euler_angles_1 = SuperVector(x=0, y=165.55, z=0)
-    rotation_1 = Rotation(euler_angles=euler_angles_1)
-    scale_1 = SuperVector(x=1.0, y=1.0, z=1.0)
-    obstacles.append(Obstacle(info=info_1, name=name_1, position=position_1, rotation=rotation_1, scale=scale_1))
-    configuration = Configuration(obstacles=obstacles)
-    logger.debug(f"Generated configuration: {configuration}")
-    # today = datetime.now().strftime("%Y%m%d")
-    # fname = pathlib.Path(f"config_samples/{today}-mixed-obstacles.json")
-    # fname.parent.mkdir(parents=True, exist_ok=True)
-    # barricade.to_json(fname, pretty=True)
-    logger.info(configuration.model_dump_json(indent=2))
+    asset_info = InfoRobots(name="Husky")
+    info = asset_info.load_asset_info()
+    print(info)
+    # name_1 = "Husky"
+    # info_1 = InfoRobots(name=name_1)
+    # position_1 = Position(x=0.0490000844, y=0.140999854, z=-30.276001)
+    # euler_angles_1 = SuperVector(x=0, y=165.55, z=0)
+    # rotation_1 = Rotation(euler_angles=euler_angles_1)
+    # scale_1 = SuperVector(x=1.0, y=1.0, z=1.0)
+    # obstacles.append(Obstacle(info=info_1, name=name_1, position=position_1, rotation=rotation_1, scale=scale_1))
+    # configuration = Configuration(obstacles=obstacles)
+    # logger.debug(f"Generated configuration: {configuration}")
+    # # today = datetime.now().strftime("%Y%m%d")
+    # # fname = pathlib.Path(f"config_samples/{today}-mixed-obstacles.json")
+    # # fname.parent.mkdir(parents=True, exist_ok=True)
+    # # barricade.to_json(fname, pretty=True)
+    # logger.info(configuration.model_dump_json(indent=2))
